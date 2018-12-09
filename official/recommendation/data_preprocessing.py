@@ -60,12 +60,6 @@ _EXPECTED_CACHE_KEYS = (
   rconst.EVAL_ITEM_KEY, rconst.USER_MAP, rconst.ITEM_MAP)
 
 
-# Number of batches to run per epoch when using synthetic data. At high batch
-# sizes, we run for more batches than with real data, which is good since
-# running more batches reduces noise when measuring the average batches/second.
-SYNTHETIC_BATCHES_PER_EPOCH = 2000
-
-
 class NCFDataset(object):
   """Container for training and testing data."""
 
@@ -275,7 +269,10 @@ def instantiate_pipeline(dataset, data_dir, num_data_readers, match_mlperf,
       eval_pos_users=raw_data[rconst.EVAL_USER_KEY],
       eval_pos_items=raw_data[rconst.EVAL_ITEM_KEY],
       eval_batch_size=params["eval_batch_size"],
-      batches_per_eval_step=params["batches_per_step"]
+      batches_per_eval_step=params["batches_per_step"],
+
+      # TODO(robieta): make conditional again.
+      stream_files=params["use_tpu"] or True
   )
 
   run_time = timeit.default_timer() - st
@@ -287,110 +284,9 @@ def instantiate_pipeline(dataset, data_dir, num_data_readers, match_mlperf,
   return ncf_dataset, producer
 
 
-def get_map_fn(is_training, params):
-  def item_cast(items):
-    if params["use_tpu"] or params["use_xla_for_gpu"]:
-        return tf.cast(items, tf.int32)  # TPU and XLA disallows uint16 infeed.
-    return items
-
-  if is_training:
-    def map_fn(users, items, labels, mask_start):
-        return {
-            movielens.USER_COLUMN: users,
-            movielens.ITEM_COLUMN: item_cast(items),
-            rconst.MASK_START_INDEX: mask_start,
-        }, labels
-    return map_fn
-
-  def map_fn(users, items, duplicate_mask):
-      return {
-          movielens.USER_COLUMN: users,
-          movielens.ITEM_COLUMN: item_cast(items),
-          rconst.DUPLICATE_MASK: duplicate_mask,
-      }
-  return map_fn
-
-
-def make_input_fn(producer, is_training, use_tpu):
-  # type: (data_pipeline.BaseDataConstructor, bool, bool) -> (typing.Callable, int)
-  if use_tpu:
-    raise NotImplementedError["TODO(robieta): StreamingFilesDataset"]
-
-  if isinstance(producer, data_pipeline.DummyConstructor):
-    return make_synthetic_input_fn(is_training=is_training)
-
-  if is_training:
-    generator = producer.training_generator
-    batch_size = producer.train_batch_size
-    output_types = producer.train_gen_types
-    output_shapes = producer.train_gen_shapes
-  else:
-    generator = producer.eval_generator
-    batch_size = producer.eval_batch_size
-    output_types = producer.eval_gen_types
-    output_shapes = producer.eval_gen_shapes
-
-  def input_fn(params):
-    param_batch_size = (params["batch_size"] if is_training else
-                        params["eval_batch_size"])
-    if batch_size != param_batch_size:
-      raise ValueError("producer batch size ({}) differs from params batch "
-                       "size ({})".format(batch_size, param_batch_size))
-
-    dataset = tf.data.Dataset.from_generator(
-        generator=generator, output_types=output_types,
-        output_shapes=output_shapes)
-
-    dataset = dataset.map(get_map_fn(is_training, params))
-    dataset = dataset.prefetch(16)
-
-    return dataset
-
-  return input_fn
 
 
 # TODO(robieta): Some of this will be used for StreamingFilesDataset
-# def make_deserialize(params, batch_size, training=False):
-#   """Construct deserialize function for training and eval fns."""
-#   feature_map = {
-#       movielens.USER_COLUMN: tf.FixedLenFeature([], dtype=tf.string),
-#       movielens.ITEM_COLUMN: tf.FixedLenFeature([], dtype=tf.string),
-#   }
-#   if training:
-#     feature_map["labels"] = tf.FixedLenFeature([], dtype=tf.string)
-#   else:
-#     feature_map[rconst.DUPLICATE_MASK] = tf.FixedLenFeature([], dtype=tf.string)
-#
-#   def deserialize(examples_serialized):
-#     """Called by Dataset.map() to convert batches of records to tensors."""
-#     features = tf.parse_single_example(examples_serialized, feature_map)
-#     users = tf.reshape(tf.decode_raw(
-#         features[movielens.USER_COLUMN], tf.int32), (batch_size,))
-#     items = tf.reshape(tf.decode_raw(
-#         features[movielens.ITEM_COLUMN], tf.uint16), (batch_size,))
-#
-#     if params["use_tpu"] or params["use_xla_for_gpu"]:
-#       items = tf.cast(items, tf.int32)  # TPU and XLA disallows uint16 infeed.
-#
-#     if not training:
-#       dupe_mask = tf.reshape(tf.cast(tf.decode_raw(
-#           features[rconst.DUPLICATE_MASK], tf.int8), tf.bool), (batch_size,))
-#       return {
-#           movielens.USER_COLUMN: users,
-#           movielens.ITEM_COLUMN: items,
-#           rconst.DUPLICATE_MASK: dupe_mask,
-#       }
-#
-#     labels = tf.reshape(tf.cast(tf.decode_raw(
-#         features["labels"], tf.int8), tf.bool), (batch_size,))
-#
-#     return {
-#         movielens.USER_COLUMN: users,
-#         movielens.ITEM_COLUMN: items,
-#     }, labels
-#   return deserialize
-#
-#
 # def hash_pipeline(dataset, deterministic):
 #   # type: (tf.data.Dataset, bool) -> None
 #   """Utility function for detecting non-determinism in the data pipeline.
@@ -544,41 +440,3 @@ def make_input_fn(producer, is_training, use_tpu):
 #   with tf.gfile.Open(ready_file, "r") as f:
 #     epoch_metadata = json.load(f)
 #   return epoch_metadata, record_dir, template
-
-
-def make_synthetic_input_fn(is_training):
-  """Construct training input_fn that uses synthetic data."""
-  def input_fn(params):
-    """Generated input_fn for the given epoch."""
-    batch_size = (params["batch_size"] if is_training else
-                  params["eval_batch_size"] or params["batch_size"])
-    num_users = params["num_users"]
-    num_items = params["num_items"]
-
-    users = tf.random_uniform([batch_size], dtype=tf.int32, minval=0,
-                              maxval=num_users)
-    items = tf.random_uniform([batch_size], dtype=tf.int32, minval=0,
-                              maxval=num_items)
-
-    if is_training:
-      labels = tf.random_uniform([batch_size], dtype=tf.int32, minval=0,
-                                 maxval=2)
-      data = {
-          movielens.USER_COLUMN: users,
-          movielens.ITEM_COLUMN: items,
-      }, labels
-    else:
-      dupe_mask = tf.cast(tf.random_uniform([batch_size], dtype=tf.int32,
-                                            minval=0, maxval=2), tf.bool)
-      data = {
-          movielens.USER_COLUMN: users,
-          movielens.ITEM_COLUMN: items,
-          rconst.DUPLICATE_MASK: dupe_mask,
-      }
-
-    dataset = tf.data.Dataset.from_tensors(data).repeat(
-        SYNTHETIC_BATCHES_PER_EPOCH)
-    dataset = dataset.prefetch(32)
-    return dataset
-
-  return input_fn, SYNTHETIC_BATCHES_PER_EPOCH
