@@ -270,9 +270,7 @@ def instantiate_pipeline(dataset, data_dir, num_data_readers, match_mlperf,
       eval_pos_items=raw_data[rconst.EVAL_ITEM_KEY],
       eval_batch_size=params["eval_batch_size"],
       batches_per_eval_step=params["batches_per_step"],
-
-      # TODO(robieta): make conditional again.
-      stream_files=params["use_tpu"] or True
+      stream_files=params["use_tpu"]
   )
 
   run_time = timeit.default_timer() - st

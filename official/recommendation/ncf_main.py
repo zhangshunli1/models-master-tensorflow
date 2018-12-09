@@ -242,15 +242,12 @@ def run_ncf(_):
     mlperf_helper.ncf_print(key=mlperf_helper.TAGS.TRAIN_EPOCH,
                             value=cycle_index)
 
-    train_input_fn = data_preprocessing.make_input_fn(
-        producer=producer, is_training=True, use_tpu=params["use_tpu"])
-
+    train_input_fn = producer.make_input_fn(is_training=True)
     train_estimator.train(input_fn=train_input_fn, hooks=train_hooks,
                           steps=num_train_steps)
 
     tf.logging.info("Beginning evaluation.")
-    eval_input_fn = data_preprocessing.make_input_fn(
-        producer=producer, is_training=False, use_tpu=params["use_tpu"])
+    eval_input_fn = producer.make_input_fn(is_training=False)
 
     mlperf_helper.ncf_print(key=mlperf_helper.TAGS.EVAL_START,
                             value=cycle_index)
