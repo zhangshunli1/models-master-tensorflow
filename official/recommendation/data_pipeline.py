@@ -23,10 +23,12 @@ import collections
 import os
 import pickle
 import struct
+import sys
 import tempfile
 import threading
 import time
 import timeit
+import traceback
 
 import numpy as np
 from six.moves import queue
@@ -76,6 +78,7 @@ class DatasetManager(object):
     self._stream_files = stream_files
     self._batches_per_epoch = batches_per_epoch
     self._epochs_completed = 0
+    self._epochs_requested = 0
     self._shard_root = shard_root
 
     self._result_queue = queue.Queue()
@@ -86,6 +89,11 @@ class DatasetManager(object):
     subdir = (rconst.TRAIN_FOLDER_TEMPLATE.format(self._epochs_completed)
               if self._is_training else rconst.EVAL_FOLDER)
     return os.path.join(self._shard_root, subdir)
+
+  def buffer_reached(self):
+    # Only applicable for training.
+    return (self._epochs_completed - self._epochs_requested >=
+            rconst.CYCLES_TO_BUFFER and self._is_training)
 
   @staticmethod
   def _serialize(data):
@@ -130,7 +138,7 @@ class DatasetManager(object):
 
   def put(self, index, data):
     # type: (int, dict) -> None
-    if self.stream_files:
+    if self._stream_files:
       example_bytes = self._serialize(data)
       shard_name = rconst.SHARD_TEMPLATE.format(index % rconst.NUM_FILE_SHARDS)
       fpath = os.path.join(self.current_train_root, shard_name)
@@ -169,6 +177,7 @@ class DatasetManager(object):
         yield i
 
   def get_dataset(self, batch_size):
+    self._epochs_requested += 1
     if self._stream_files:
       epoch_data_dir = self._result_queue.get(timeout=300)
       if not self._is_training:
@@ -185,7 +194,7 @@ class DatasetManager(object):
     shapes = {movielens.USER_COLUMN: tf.TensorShape([batch_size]),
               movielens.ITEM_COLUMN: tf.TensorShape([batch_size])}
 
-    if is_training:
+    if self._is_training:
       types[rconst.MASK_START_INDEX] = np.int32
       shapes[rconst.MASK_START_INDEX] = tf.TensorShape([])
 
@@ -328,13 +337,23 @@ class BaseDataConstructor(threading.Thread):
   def lookup_negative_items(self, **kwargs):
     raise NotImplementedError
 
-  def run(self):
+  def _run(self):
     self._shuffle_producer.start()
     self.construct_lookup_variables()
     self._construct_training_epoch()
     self._construct_eval_epoch()
     for _ in range(self._maximum_number_epochs - 1):
       self._construct_training_epoch()
+
+  def run(self):
+    try:
+      self._run()
+    except Exception:
+      # The Thread base class swallows stack traces, so unfortunately it is
+      # necessary to catch and re-raise to get debug output
+      print(traceback.format_exc(), file=sys.stderr)
+      sys.stderr.flush()
+      raise
 
   def _get_training_batch(self, i):
     batch_indices = self._get_order_chunk()
@@ -373,9 +392,8 @@ class BaseDataConstructor(threading.Thread):
     })
 
   def _wait_to_construct_train_epoch(self):
-    threshold = rconst.CYCLES_TO_BUFFER * self.train_batches_per_epoch
     count = 0
-    while self._training_queue.qsize() >= threshold and not self._stop_loop:
+    while self._train_dataset.buffer_reached() and not self._stop_loop:
       time.sleep(0.01)
       count += 1
       if count >= 100 and np.log10(count) == np.round(np.log10(count)):
@@ -392,6 +410,7 @@ class BaseDataConstructor(threading.Thread):
     map_args = list(range(self.train_batches_per_epoch))
     assert not self._current_epoch_order.shape[0]
     self._current_epoch_order = self._shuffle_producer.get()
+
     with popen_helper.get_threadpool(6) as pool:
       pool.map(self._get_training_batch, map_args)
     self._train_dataset.end_construction()
