@@ -71,6 +71,7 @@ def construct_estimator(model_dir, iterations, params):
         tpu=params["tpu"],
         zone=params["tpu_zone"],
         project=params["tpu_gcp_project"],
+        coordinator_name="coordinator"
     )
     tf.logging.info("Issuing reset command to TPU to ensure a clean state.")
     tf.Session.reset(tpu_cluster_resolver.get_master())
@@ -206,8 +207,8 @@ def run_ncf(_):
     producer = data_pipeline.DummyConstructor()
     num_users, num_items = data_preprocessing.DATASET_TO_NUM_USERS_AND_ITEMS[
         FLAGS.dataset]
-    num_train_steps = data_preprocessing.SYNTHETIC_BATCHES_PER_EPOCH
-    num_eval_steps = data_preprocessing.SYNTHETIC_BATCHES_PER_EPOCH
+    num_train_steps = rconst.SYNTHETIC_BATCHES_PER_EPOCH
+    num_eval_steps = rconst.SYNTHETIC_BATCHES_PER_EPOCH
   else:
     ncf_dataset, producer = data_preprocessing.instantiate_pipeline(
         dataset=FLAGS.dataset, data_dir=FLAGS.data_dir, num_data_readers=None,

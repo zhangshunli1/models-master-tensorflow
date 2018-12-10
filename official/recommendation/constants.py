@@ -38,7 +38,7 @@ ITEM_MAP = "item_map"
 
 USER_DTYPE = np.int32
 ITEM_DTYPE = np.int32
-LABEL_DTYPE = np.int8
+LABEL_DTYPE = np.bool
 DUPE_MASK_DTYPE = np.bool
 
 # In both datasets, each user has at least 20 ratings.

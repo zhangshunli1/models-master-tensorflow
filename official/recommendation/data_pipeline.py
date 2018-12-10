@@ -60,7 +60,7 @@ Eval:
 _TRAIN_FEATURE_MAP = {
     movielens.USER_COLUMN: tf.FixedLenFeature([], dtype=tf.string),
     movielens.ITEM_COLUMN: tf.FixedLenFeature([], dtype=tf.string),
-    rconst.VALID_POINT_MASK: tf.FixedLenFeature([], dtype=tf.string),
+    rconst.MASK_START_INDEX: tf.FixedLenFeature([1], dtype=tf.string),
     "labels": tf.FixedLenFeature([], dtype=tf.string),
 }
 
@@ -118,10 +118,10 @@ class DatasetManager(object):
 
     if self._is_training:
       mask_start_index = tf.decode_raw(
-          features[rconst.MASK_START_INDEX], tf.int32)
+          features[rconst.MASK_START_INDEX], tf.int32)[0]
       valid_point_mask = tf.less(tf.range(batch_size), mask_start_index)
-      labels = tf.reshape(tf.cast(tf.decode_raw(
-          features["labels"], rconst.LABEL_DTYPE), tf.bool), (batch_size,))
+      labels = tf.reshape(tf.decode_raw(
+          features["labels"], rconst.LABEL_DTYPE), (batch_size,))
 
       return {
           movielens.USER_COLUMN: users,
@@ -135,7 +135,7 @@ class DatasetManager(object):
     return {
         movielens.USER_COLUMN: users,
         movielens.ITEM_COLUMN: items,
-        rconst.DUPLICATE_MASK: tf.cast(duplicate_mask, tf.bool)
+        rconst.DUPLICATE_MASK: duplicate_mask,
     }
 
   def put(self, index, data):
@@ -191,8 +191,9 @@ class DatasetManager(object):
 
       file_pattern = os.path.join(
           epoch_data_dir, rconst.SHARD_TEMPLATE.format("*"))
-      dataset = StreamingFilesDataset(files=file_pattern, num_epochs=1,
-                                      num_parallel_reads=rconst.NUM_FILE_SHARDS)
+      dataset = StreamingFilesDataset(
+          files=file_pattern, worker_job="worker",
+          num_parallel_reads=rconst.NUM_FILE_SHARDS)
       return dataset.map(functools.partial(self._deserialize, batch_size=batch_size), num_parallel_calls=16)
 
     types = {movielens.USER_COLUMN: rconst.USER_DTYPE,
