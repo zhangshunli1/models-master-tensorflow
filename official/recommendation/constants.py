@@ -29,6 +29,7 @@ TRAIN_USER_KEY = "train_{}".format(movielens.USER_COLUMN)
 TRAIN_ITEM_KEY = "train_{}".format(movielens.ITEM_COLUMN)
 TRAIN_LABEL_KEY = "train_labels"
 MASK_START_INDEX = "mask_start_index"
+VALID_POINT_MASK = "valid_point_mask"
 EVAL_USER_KEY = "eval_{}".format(movielens.USER_COLUMN)
 EVAL_ITEM_KEY = "eval_{}".format(movielens.ITEM_COLUMN)
 

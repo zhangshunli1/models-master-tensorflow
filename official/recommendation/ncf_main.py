@@ -92,16 +92,16 @@ def construct_estimator(model_dir, iterations, params):
     train_estimator = tf.contrib.tpu.TPUEstimator(
         model_fn=neumf_model.neumf_model_fn,
         use_tpu=True,
-        train_batch_size=params["batch_size"] * params["num_devices"],
-        eval_batch_size=params["eval_batch_size"] * params["num_devices"],
+        train_batch_size=params["batch_size"] * params["batches_per_step"],
+        eval_batch_size=params["eval_batch_size"] * params["batches_per_step"],
         params=tpu_params,
         config=run_config)
 
     eval_estimator = tf.contrib.tpu.TPUEstimator(
         model_fn=neumf_model.neumf_model_fn,
         use_tpu=True,
-        train_batch_size=params["batch_size"] * params["num_devices"],
-        eval_batch_size=params["eval_batch_size"] * params["num_devices"],
+        train_batch_size=params["batch_size"] * params["batches_per_step"],
+        eval_batch_size=params["eval_batch_size"] * params["batches_per_step"],
         params=tpu_params,
         config=run_config)
 

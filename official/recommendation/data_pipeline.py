@@ -20,6 +20,7 @@ from __future__ import print_function
 
 import atexit
 import collections
+import functools
 import os
 import pickle
 import struct
@@ -59,7 +60,7 @@ Eval:
 _TRAIN_FEATURE_MAP = {
     movielens.USER_COLUMN: tf.FixedLenFeature([], dtype=tf.string),
     movielens.ITEM_COLUMN: tf.FixedLenFeature([], dtype=tf.string),
-    rconst.MASK_START_INDEX: tf.FixedLenFeature([1], dtype=tf.string),
+    rconst.VALID_POINT_MASK: tf.FixedLenFeature([], dtype=tf.string),
     "labels": tf.FixedLenFeature([], dtype=tf.string),
 }
 
@@ -106,7 +107,7 @@ class DatasetManager(object):
     return tf.train.Example(
         features=tf.train.Features(feature=feature_dict)).SerializeToString()
 
-  def _deserialize(self, serialized_data):
+  def _deserialize(self, serialized_data, batch_size):
     feature_map = _TRAIN_FEATURE_MAP if self._is_training else _EVAL_FEATURE_MAP
     features = tf.parse_single_example(serialized_data, feature_map)
 
@@ -116,15 +117,16 @@ class DatasetManager(object):
         features[movielens.ITEM_COLUMN], rconst.ITEM_DTYPE), (batch_size,))
 
     if self._is_training:
-      data[rconst.MASK_START_INDEX] = tf.decode_raw(
+      mask_start_index = tf.decode_raw(
           features[rconst.MASK_START_INDEX], tf.int32)
+      valid_point_mask = tf.less(tf.range(batch_size), mask_start_index)
       labels = tf.reshape(tf.cast(tf.decode_raw(
           features["labels"], rconst.LABEL_DTYPE), tf.bool), (batch_size,))
 
       return {
           movielens.USER_COLUMN: users,
           movielens.ITEM_COLUMN: items,
-          rconst.MASK_START_INDEX: mask_start_index
+          rconst.VALID_POINT_MASK: valid_point_mask,
       }, labels
 
     duplicate_mask = tf.reshape(tf.decode_raw(
@@ -141,11 +143,15 @@ class DatasetManager(object):
     if self._stream_files:
       example_bytes = self._serialize(data)
       shard_name = rconst.SHARD_TEMPLATE.format(index % rconst.NUM_FILE_SHARDS)
-      fpath = os.path.join(self.current_train_root, shard_name)
+      fpath = os.path.join(self.current_data_root, shard_name)
       with tf.python_io.TFRecordWriter(fpath) as writer:
         writer.write(example_bytes)
     else:
       if self._is_training:
+        mask_start_index = data.pop(rconst.MASK_START_INDEX)
+        batch_size = data[movielens.ITEM_COLUMN].shape[0]
+        data[rconst.VALID_POINT_MASK] = np.less(np.arange(batch_size),
+                                                mask_start_index)
         self._result_queue.put((data, data.pop("labels")))
       else:
         self._result_reuse.append(data)
@@ -187,7 +193,7 @@ class DatasetManager(object):
           epoch_data_dir, rconst.SHARD_TEMPLATE.format("*"))
       dataset = StreamingFilesDataset(files=file_pattern, num_epochs=1,
                                       num_parallel_reads=rconst.NUM_FILE_SHARDS)
-      return dataset.map(self._deserialize, num_parallel_calls=16)
+      return dataset.map(functools.partial(self._deserialize, batch_size=batch_size), num_parallel_calls=16)
 
     types = {movielens.USER_COLUMN: rconst.USER_DTYPE,
              movielens.ITEM_COLUMN: rconst.ITEM_DTYPE}
@@ -195,8 +201,8 @@ class DatasetManager(object):
               movielens.ITEM_COLUMN: tf.TensorShape([batch_size])}
 
     if self._is_training:
-      types[rconst.MASK_START_INDEX] = np.int32
-      shapes[rconst.MASK_START_INDEX] = tf.TensorShape([])
+      types[rconst.VALID_POINT_MASK] = np.bool
+      shapes[rconst.VALID_POINT_MASK] = tf.TensorShape([batch_size])
 
       types = (types, rconst.LABEL_DTYPE)
       shapes = (shapes, tf.TensorShape([batch_size]))
@@ -387,7 +393,7 @@ class BaseDataConstructor(threading.Thread):
     self._train_dataset.put(i, {
       movielens.USER_COLUMN: users,
       movielens.ITEM_COLUMN: items,
-      rconst.MASK_START_INDEX: batch_indices.shape[0],
+      rconst.MASK_START_INDEX: np.array(batch_indices.shape[0], dtype=np.int32),
       "labels": labels,
     })
 

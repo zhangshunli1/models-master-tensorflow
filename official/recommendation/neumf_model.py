@@ -96,8 +96,7 @@ def neumf_model_fn(features, labels, mode, params):
 
   elif mode == tf.estimator.ModeKeys.TRAIN:
     labels = tf.cast(labels, tf.int32)
-    valid_pt_mask = tf.less(tf.range(labels.shape[0]),
-                            features[rconst.MASK_START_INDEX])
+    valid_pt_mask = features[rconst.VALID_POINT_MASK]
 
     mlperf_helper.ncf_print(key=mlperf_helper.TAGS.OPT_NAME, value="adam")
     mlperf_helper.ncf_print(key=mlperf_helper.TAGS.OPT_LR,
