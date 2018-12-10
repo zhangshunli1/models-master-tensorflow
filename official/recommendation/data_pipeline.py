@@ -116,26 +116,28 @@ class DatasetManager(object):
     items = tf.reshape(tf.decode_raw(
         features[movielens.ITEM_COLUMN], rconst.ITEM_DTYPE), (batch_size,))
 
+    def decode_binary(data_bytes):
+      # tf.decode_raw does not support bool as a decode type. As a result it is
+      # necessary to decode to int8 (7 of the bits will be ignored) and then
+      # cast to bool.
+      return tf.reshape(tf.cast(tf.decode_raw(data_bytes, tf.int8), tf.bool),
+                        (batch_size,))
+
     if self._is_training:
       mask_start_index = tf.decode_raw(
           features[rconst.MASK_START_INDEX], tf.int32)[0]
       valid_point_mask = tf.less(tf.range(batch_size), mask_start_index)
-      labels = tf.reshape(tf.decode_raw(
-          features["labels"], rconst.LABEL_DTYPE), (batch_size,))
 
       return {
           movielens.USER_COLUMN: users,
           movielens.ITEM_COLUMN: items,
           rconst.VALID_POINT_MASK: valid_point_mask,
-      }, labels
-
-    duplicate_mask = tf.reshape(tf.decode_raw(
-        features[rconst.DUPLICATE_MASK], rconst.DUPE_MASK_DTYPE), (batch_size,))
+      }, decode_binary(features["labels"])
 
     return {
         movielens.USER_COLUMN: users,
         movielens.ITEM_COLUMN: items,
-        rconst.DUPLICATE_MASK: duplicate_mask,
+        rconst.DUPLICATE_MASK: decode_binary(features[rconst.DUPLICATE_MASK]),
     }
 
   def put(self, index, data):
